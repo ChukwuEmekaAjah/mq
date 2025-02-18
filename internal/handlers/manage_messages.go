@@ -44,6 +44,10 @@ func ManageMessages(store *mq.Store) func(http.ResponseWriter, *http.Request) {
 					DeleteMessage(store, w, req)
 					return
 				}
+				if req.Method == "POST" {
+					ChangeMessageVisibilityTimeout(store, w, req)
+					return
+				}
 			}
 		}(w, req)
 

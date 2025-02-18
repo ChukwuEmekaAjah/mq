@@ -276,3 +276,29 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 
 	return result
 }
+
+// UpdateMessage updates specific fields in a message
+func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
+	_, ok := s.queues.Load(queue)
+	if !ok {
+		return false, errors.New("Queue does not exist")
+	}
+
+	switch data.(type) {
+	case models.ChangeMessageVisibilityRequest:
+		if data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout < 0 {
+			return false, errors.New("Message visibility timeout cannot be less than 0")
+		}
+		receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
+		node, ok := receivedMessagesMapDB.(*sync.Map).Load(data.(models.ChangeMessageVisibilityRequest).ReceiptHandle)
+		if !ok {
+			return false, errors.New("Message receipt handle does not exist")
+		}
+
+		node.(*DLLQueueNode).Val.ReadAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
+
+		node, _ = receivedMessagesMapDB.(*sync.Map).Load(data.(models.ChangeMessageVisibilityRequest).ReceiptHandle)
+	}
+
+	return true, nil
+}
