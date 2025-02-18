@@ -213,9 +213,9 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 }
 
 // DeleteMessageBatch removes messages from read messages queue
-func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageBatchRequestEntry) models.DeleteMessageBatchResult {
-	result := models.DeleteMessageBatchResult{
-		Successful: make([]models.DeleteMessageBatchResultEntry, 0),
+func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageBatchRequestEntry) models.BatchResult {
+	result := models.BatchResult{
+		Successful: make([]models.BatchResultEntry, 0),
 		Failed:     make([]models.BatchResultErrorEntry, 0),
 	}
 
@@ -251,7 +251,7 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		// Check if the message was read before the queue was last purged
 		queueDB, _ := s.queues.Load(queue)
 		if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*DLLQueueNode).Val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
-			result.Successful = append(result.Successful, models.DeleteMessageBatchResultEntry{
+			result.Successful = append(result.Successful, models.BatchResultEntry{
 				ID: entry.ID,
 			})
 			continue
@@ -269,7 +269,7 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		}
 
 		receivedMessagesMapDB.(*sync.Map).Delete(entry.ReceiptHandle)
-		result.Successful = append(result.Successful, models.DeleteMessageBatchResultEntry{
+		result.Successful = append(result.Successful, models.BatchResultEntry{
 			ID: entry.ID,
 		})
 	}
@@ -297,8 +297,60 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 
 		node.(*DLLQueueNode).Val.ReadAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
 
-		node, _ = receivedMessagesMapDB.(*sync.Map).Load(data.(models.ChangeMessageVisibilityRequest).ReceiptHandle)
 	}
 
 	return true, nil
+}
+
+// UpdateMessageBatch updates specific fields in a message
+func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageVisibilityRequest) models.BatchResult {
+	result := models.BatchResult{
+		Successful: make([]models.BatchResultEntry, 0),
+		Failed:     make([]models.BatchResultErrorEntry, 0),
+	}
+	_, ok := s.queues.Load(queue)
+	if !ok {
+		for _, entry := range entries {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Queue does not exist",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+		}
+		return result
+	}
+
+	receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
+	for _, entry := range entries {
+
+		if entry.VisibilityTimeout < 0 {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Message visibility timeout cannot be less than 0",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+			continue
+		}
+
+		node, ok := receivedMessagesMapDB.(*sync.Map).Load(entry.ReceiptHandle)
+		if !ok {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Message receipt handle does not exist",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+			continue
+		}
+
+		node.(*DLLQueueNode).Val.ReadAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
+
+		result.Successful = append(result.Successful, models.BatchResultEntry{
+			ID: entry.ID,
+		})
+	}
+
+	return result
 }

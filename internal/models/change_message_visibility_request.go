@@ -5,4 +5,5 @@ package models
 type ChangeMessageVisibilityRequest struct {
 	ReceiptHandle     string
 	VisibilityTimeout int
+	ID                string
 }

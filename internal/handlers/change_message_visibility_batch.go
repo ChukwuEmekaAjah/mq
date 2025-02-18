@@ -10,20 +10,15 @@ import (
 	"github.com/ChukwuEmekaAjah/mq/mq"
 )
 
-// ChangeMessageVisibilityTimeoutBatch updates the visibility timeout of a batch of messages
-func ChangeMessageVisibilityTimeoutBatch(store *mq.Store, w http.ResponseWriter, req *http.Request) {
+// DeleteMessageBatch deletes a queue from record
+func DeleteMessageBatch(store *mq.Store, w http.ResponseWriter, req *http.Request) {
 
 	requestBodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
-		response, err := json.Marshal(util.ResponseBody{
+		response, _ := json.Marshal(util.ResponseBody{
 			Message: "Request body could not be read",
 			Data:    nil,
 		})
-
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
 
 		w.WriteHeader(http.StatusBadRequest)
 		w.Write(response)
@@ -31,7 +26,7 @@ func ChangeMessageVisibilityTimeoutBatch(store *mq.Store, w http.ResponseWriter,
 	}
 
 	var requestBody struct {
-		Entries []models.DeleteMessageBatchRequestEntry
+		Entries []models.ChangeMessageVisibilityRequest
 	}
 	err = json.Unmarshal(requestBodyBytes, &requestBody)
 	if err != nil {
@@ -45,11 +40,11 @@ func ChangeMessageVisibilityTimeoutBatch(store *mq.Store, w http.ResponseWriter,
 		return
 	}
 
-	result := store.DeleteMessageBatch(req.PathValue("queueName"), requestBody.Entries)
+	result := store.UpdateMessageBatch(req.PathValue("queueName"), requestBody.Entries)
 
 	w.WriteHeader(http.StatusOK)
 	response, marshalErr := json.Marshal(util.ResponseBody{
-		Message: "Successfully deleted messages from queue",
+		Message: "Successfully changed message visibility timeouts for messages",
 		Data:    result,
 	})
 
