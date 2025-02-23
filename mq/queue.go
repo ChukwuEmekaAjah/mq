@@ -134,14 +134,14 @@ type QueueAttributes struct {
 // Queue represents the abstraction of a queue data structure
 type Queue struct {
 	ID         string
-	Head       *QueueNode
-	Tail       *QueueNode
-	Size       uint
+	Head       *QueueNode `json:"-"`
+	Tail       *QueueNode `json:"-"`
+	Size       uint       `json:"-"`
 	mu         sync.Mutex
 	QueueName  string
 	Attributes QueueAttributes
 	Tags       map[string]string
-	PurgedAt   time.Time
+	PurgedAt   time.Time `json:"-"`
 }
 
 // Dequeue removes a message from the head of the queue

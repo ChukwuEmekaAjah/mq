@@ -113,6 +113,24 @@ func (s *Store) GetQueue(name string) (*Queue, error) {
 	return queue.(*Queue), nil
 }
 
+// ListQueues retrieves all the queues on the server
+func (s *Store) ListQueues() []Queue {
+	result := make([]Queue, 0)
+
+	s.queues.Range(func(name interface{}, queue interface{}) bool {
+		q := queue.(*Queue)
+		result = append(result, Queue{
+			Attributes: q.Attributes,
+			QueueName:  q.QueueName,
+			ID:         q.ID,
+			Tags:       q.Tags,
+		})
+		return true
+	})
+
+	return result
+}
+
 // AddMessage adds a message to a queue
 func (s *Store) AddMessage(queue string, message []byte) (string, error) {
 	queueDB, ok := s.queues.Load(queue)
