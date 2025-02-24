@@ -21,6 +21,11 @@ func ManageQueues(store *mq.Store) func(http.ResponseWriter, *http.Request) {
 					CreateQueue(store, w, req)
 					return
 				}
+
+				if req.Method == "GET" {
+					ListQueues(store, w, req)
+					return
+				}
 			}
 
 			if req.Pattern == "/queues/{queueName}" && req.Method == "DELETE" {
