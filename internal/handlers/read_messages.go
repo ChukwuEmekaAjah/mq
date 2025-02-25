@@ -61,7 +61,7 @@ func ReadMessages(store *mq.Store, w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	response, marshalErr := json.Marshal(util.ResponseBody{
 		Message: "Successfully retrieved messages from queue",
 		Data:    messages,
