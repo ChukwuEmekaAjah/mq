@@ -214,6 +214,7 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 		return false, errors.New("Message receipt handle does not exist")
 	}
 
+	receivedMessagesMapDB.(*sync.Map).Delete(receiptHandle)
 	// Check if the message was read before the queue was last purged
 	queueDB, _ := s.queues.Load(queue)
 	if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*DLLQueueNode).Val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
@@ -226,7 +227,6 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 		return false, errors.New("Message could not be deleted")
 	}
 
-	receivedMessagesMapDB.(*sync.Map).Delete(receiptHandle)
 	return true, nil
 }
 

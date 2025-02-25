@@ -1,6 +1,7 @@
 package mq
 
 import (
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -122,6 +123,28 @@ func (q *DLLQueue) Clear() bool {
 	return true
 }
 
+// MessagesToJSON converts all queue messages to a json array
+func (q *DLLQueue) MessagesToJSON() ([]byte, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	result := make([]Message, 0, q.Size)
+
+	current := q.Head.Next
+	for current != q.Tail {
+		result = append(result, current.Val)
+		current = current.Next
+	}
+
+	messageBytes, err := json.Marshal(result)
+
+	if err != nil {
+		return []byte{}, err
+	}
+
+	return messageBytes, nil
+}
+
 // QueueAttributes represents the attributes of a queue
 type QueueAttributes struct {
 	DelaySeconds                  uint
@@ -213,4 +236,38 @@ func (q *Queue) Enqueue(message *QueueNode) error {
 	q.Size++
 	return nil
 
+}
+
+// ToJSON converts the queue struct to a json string
+func (q *Queue) ToJSON() ([]byte, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	qBytes, err := json.Marshal(q)
+
+	if err != nil {
+		return []byte{}, err
+	}
+
+	return qBytes, nil
+}
+
+// MessagesToJSON converts the queue messages struct to json
+func (q *Queue) MessagesToJSON() ([]byte, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	result := make([]Message, 0, q.Size)
+
+	current := q.Head
+	for current != nil {
+		result = append(result, current.Val)
+		current = current.Next
+	}
+
+	messageBytes, err := json.Marshal(result)
+
+	if err != nil {
+		return []byte{}, err
+	}
+
+	return messageBytes, nil
 }
