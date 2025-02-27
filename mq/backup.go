@@ -2,9 +2,13 @@ package mq
 
 import (
 	"archive/zip"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"path"
 	"time"
 
 	"github.com/ChukwuEmekaAjah/mq/internal/util"
@@ -29,6 +33,7 @@ func (f *FileStorageManager) Store(file *ZipFile) {
 // ZipFile represents a collection of files to be compressed
 type ZipFile struct {
 	writer *zip.Writer
+	reader *zip.ReadCloser
 }
 
 // WriteFile adds a new file to the zip file
@@ -46,6 +51,58 @@ func (z *ZipFile) WriteFile(name string, contents []byte) error {
 	return nil
 }
 
+// ReadFile reads the contents of a zip file
+func (z *ZipFile) ReadFile() (map[string]interface{}, error) {
+
+	// Iterate through the files in the archive,
+	// printing some of their contents.
+	result := make(map[string]interface{})
+	for _, f := range z.reader.File {
+		rc, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+
+		switch {
+		case f.Name == "queue.json":
+			q := &Queue{}
+			buf := bytes.NewBuffer(nil)
+			_, err := io.Copy(buf, rc)
+			if err != nil {
+				return nil, err
+			}
+			err = json.Unmarshal(buf.Bytes(), q)
+			result["queue"] = q
+			rc.Close()
+			break
+		case f.Name == "messages.json":
+			messages := new([]Message)
+			buf := bytes.NewBuffer(nil)
+			_, err := io.Copy(buf, rc)
+			if err != nil {
+				return nil, err
+			}
+			err = json.Unmarshal(buf.Bytes(), messages)
+			result["messages"] = messages
+			rc.Close()
+			break
+		case f.Name == "read_messages.json":
+			messages := new([]Message)
+			buf := bytes.NewBuffer(nil)
+			_, err := io.Copy(buf, rc)
+			if err != nil {
+				return nil, err
+			}
+			err = json.Unmarshal(buf.Bytes(), messages)
+			result["readMessages"] = messages
+			rc.Close()
+			break
+		}
+	}
+
+	return result, nil
+}
+
 // Close shuts down the zip file writer
 func (z *ZipFile) Close() error {
 	err := z.writer.Close()
@@ -58,7 +115,6 @@ func (z *ZipFile) Close() error {
 
 // Backup tries to backup queue data based on set configuration
 func Backup(store *Store, config *util.ServerConfig) {
-	fmt.Println(fmt.Sprintf("server config is %+v", *config))
 	// each queue will have one directory
 	// queue metadata will be its own json file
 	// queue messages will be its own json file
@@ -71,6 +127,10 @@ func Backup(store *Store, config *util.ServerConfig) {
 		})
 		backupManager := &FileStorageManager{
 			location: "queue",
+		}
+		err := os.MkdirAll(config.BackupBucket, 0770)
+		if err != nil {
+			log.Fatal("Could not create backup directory", err)
 		}
 
 		for _, queueName := range queueNames {
@@ -98,7 +158,11 @@ func Backup(store *Store, config *util.ServerConfig) {
 
 			readMessagesBytes, err := readQ.(*DLLQueue).MessagesToJSON()
 
-			buffer, _ := os.Create(fmt.Sprintf("%s_%s.zip", backupManager.location, queueName))
+			buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", backupManager.location, queueName)))
+
+			if err != nil {
+				continue
+			}
 			zipFile := &ZipFile{writer: zip.NewWriter(buffer)}
 			zipFile.WriteFile("queue.json", qBytes)
 			zipFile.WriteFile("messages.json", messageBytes)

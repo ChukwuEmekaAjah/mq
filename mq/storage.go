@@ -222,6 +222,7 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 		return true, nil
 	}
 
+	// will not need this again once we migrate to PriorityQueue based on when message was read
 	err := receivedMessagesQueueDB.(*DLLQueue).Remove(node.(*DLLQueueNode))
 	if err != nil {
 		return false, errors.New("Message could not be deleted")

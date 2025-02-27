@@ -63,6 +63,24 @@ func (q *DLLQueue) Enqueue(message *DLLQueueNode) *DLLQueueNode {
 
 }
 
+// EnqueueBatch adds a group of messages to the queue
+func (q *DLLQueue) EnqueueBatch(messages []*DLLQueueNode) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, message := range messages {
+		message.Prev = q.Tail.Prev
+		message.Next = q.Tail
+		q.Tail.Prev.Next = message
+		q.Tail.Prev = message
+
+		q.Size++
+	}
+
+	return nil
+
+}
+
 // Dequeue removes a message from the head of the queue
 func (q *DLLQueue) Dequeue() (*DLLQueueNode, error) {
 	q.mu.Lock()
@@ -236,6 +254,28 @@ func (q *Queue) Enqueue(message *QueueNode) error {
 	q.Size++
 	return nil
 
+}
+
+// EnqueueBatch adds a group of messages to the queue
+func (q *Queue) EnqueueBatch(messages []*QueueNode) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(messages) == 0 {
+		return nil
+	}
+	if q.Size == 0 {
+		q.Head = messages[0]
+		q.Tail = messages[0]
+		q.Size++
+	}
+
+	for _, message := range messages[1:] {
+		q.Tail.Next = message
+		q.Tail = message
+		q.Size++
+	}
+
+	return nil
 }
 
 // ToJSON converts the queue struct to a json string
