@@ -1,6 +1,7 @@
 package mq
 
 import (
+	"container/heap"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -15,147 +16,151 @@ type QueueNode struct {
 	Next *QueueNode
 }
 
-// DLLQueueNode represents a message item in the message queue
-type DLLQueueNode struct {
-	Val  Message
-	Next *DLLQueueNode
-	Prev *DLLQueueNode
+// Item represents a node in the queue
+type Item struct {
+	val   Message
+	index int
 }
 
-// DLLQueue represents a doubly-linked queue
-type DLLQueue struct {
-	Name string
-	ID   string
-	Head *DLLQueueNode
-	Tail *DLLQueueNode
-	Size uint
-	mu   sync.Mutex
+// PriorityQueueContainer is an abstraction on top a slice that contains a list of messages
+type PriorityQueueContainer []*Item
+
+// Len returns the length of the priority queue container
+func (pqc PriorityQueueContainer) Len() int {
+	return len(pqc)
 }
 
-// NewDLLQueue creates a new DLLQueue and returns a reference to the pointer
-func NewDLLQueue(name, id string) *DLLQueue {
-	head := &DLLQueueNode{}
-	tail := &DLLQueueNode{}
-	tail.Prev = head
-	head.Next = tail
-	return &DLLQueue{
-		Name: name,
-		ID:   id,
-		Head: head,
-		Tail: tail,
-		Size: 0,
+// Less checks if one value is greater than the other
+func (pqc PriorityQueueContainer) Less(i, j int) bool {
+	return pqc[i].val.ReadAt.Before(pqc[j].val.ReadAt)
+}
+
+// Swap updates the position of an item in the queue
+func (pqc PriorityQueueContainer) Swap(i, j int) {
+	pqc[i], pqc[j] = pqc[j], pqc[i]
+	pqc[i].index = i
+	pqc[j].index = j
+}
+
+// Push adds an item to the queue
+func (pqc *PriorityQueueContainer) Push(msg any) {
+	size := len(*pqc)
+	item := msg.(*Item)
+	item.index = size
+	*pqc = append(*pqc, item)
+}
+
+// get retrieves item at given position
+func (pqc PriorityQueueContainer) get(index int) *Item {
+	return pqc[index]
+}
+
+// Pop removes the oldest read message from the queue
+func (pqc *PriorityQueueContainer) Pop() any {
+	old := *pqc
+	size := len(old)
+	item := old[size-1]
+	old[size-1] = nil
+	item.index = -1 // for safety
+	*pqc = old[0 : size-1]
+	return item
+}
+
+// PriorityQueue represents a collection for managing read messages and
+// keeping them in order based on the time the message was read
+type PriorityQueue struct {
+	name      string
+	id        string
+	mu        sync.Mutex
+	container *PriorityQueueContainer
+}
+
+// NewPriorityQueue creates and returns a new instance of a priority queue
+func NewPriorityQueue(name, id string) *PriorityQueue {
+	return &PriorityQueue{
+		name:      name,
+		id:        id,
+		container: new(PriorityQueueContainer),
 	}
 }
 
 // Enqueue adds a message to the queue
-func (q *DLLQueue) Enqueue(message *DLLQueueNode) *DLLQueueNode {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) Enqueue(msg *Item) *Item {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	message.Prev = q.Tail.Prev
-	message.Next = q.Tail
-	q.Tail.Prev.Next = message
-	q.Tail.Prev = message
-
-	q.Size++
-
-	return message
-
+	heap.Push(pq.container, msg)
+	return msg
 }
 
 // EnqueueBatch adds a group of messages to the queue
-func (q *DLLQueue) EnqueueBatch(messages []*DLLQueueNode) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) EnqueueBatch(msgs []*Item) {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	for _, message := range messages {
-		message.Prev = q.Tail.Prev
-		message.Next = q.Tail
-		q.Tail.Prev.Next = message
-		q.Tail.Prev = message
-
-		q.Size++
+	for _, msg := range msgs {
+		heap.Push(pq.container, msg)
 	}
-
-	return nil
-
 }
 
 // Dequeue removes a message from the head of the queue
-func (q *DLLQueue) Dequeue() (*DLLQueueNode, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) Dequeue() (*Item, error) {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	if q.Size < 1 {
+	if pq.container.Len() < 1 {
 		return nil, errors.New("Queue is empty")
 	}
 
-	temp := q.Head.Next
-	q.Head.Next = temp.Next
-	temp.Next.Prev = q.Head
+	item := heap.Pop(pq.container)
 
-	q.Size--
-
-	return temp, nil
+	return item.(*Item), nil
 }
 
 // Remove deletes a node from its position in the queue
-func (q *DLLQueue) Remove(node *DLLQueueNode) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) Remove(node *Item) error {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	if q.Size < 1 {
+	if pq.container.Len() < 1 {
 		return errors.New("Queue is empty")
 	}
 
-	node.Prev.Next = node.Next
-	node.Next.Prev = node.Prev
-	node.Prev = nil
-	node.Next = nil
-	q.Size--
-
+	heap.Remove(pq.container, node.index)
 	return nil
 }
 
 // Front returns element in front of the queue
-func (q *DLLQueue) Front() *DLLQueueNode {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) Front() *Item {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	if q.Size < 1 {
+	if pq.container.Len() < 1 {
 		return nil
 	}
 
-	return q.Head.Next
+	return pq.container.get(0)
 }
 
 // Clear removes all the messages in the queue
-func (q *DLLQueue) Clear() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) Clear() bool {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	q.Size = 0
-	q.Head.Next = q.Tail
-	q.Tail.Prev = q.Head
-
+	pq.container = new(PriorityQueueContainer)
 	return true
 }
 
 // MessagesToJSON converts all queue messages to a json array
-func (q *DLLQueue) MessagesToJSON() ([]byte, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+func (pq *PriorityQueue) MessagesToJSON() ([]byte, error) {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
 
-	result := make([]Message, 0, q.Size)
-
-	current := q.Head.Next
-	for current != q.Tail {
-		result = append(result, current.Val)
-		current = current.Next
+	result := make([]Message, 0, pq.container.Len())
+	for _, item := range *pq.container {
+		result = append(result, item.val)
 	}
-
 	messageBytes, err := json.Marshal(result)
-
 	if err != nil {
 		return []byte{}, err
 	}

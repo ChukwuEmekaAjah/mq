@@ -48,7 +48,7 @@ func (s *Store) CreateQueue(name string, attributes QueueAttributes, tags map[st
 		Tags:       tags,
 	})
 
-	s.receivedMessagesQueues.Store(name, NewDLLQueue(name, id))
+	s.receivedMessagesQueues.Store(name, NewPriorityQueue(name, id))
 
 	s.receivedMessagesMap.Store(name, &sync.Map{})
 
@@ -77,7 +77,7 @@ func (s *Store) PurgeQueue(name string) (bool, error) {
 	queueDB.(*Queue).Clear()
 
 	receivedMessagesQueueDB, _ := s.receivedMessagesQueues.Load(name)
-	receivedMessagesQueueDB.(*DLLQueue).Clear()
+	receivedMessagesQueueDB.(*PriorityQueue).Clear()
 
 	return true, nil
 }
@@ -189,9 +189,7 @@ func (s *Store) ReadMessages(queue string, size uint) ([]Message, error) {
 		queueNode.Val.Attributes.ApproximateFirstReceiveTimeStamp = int(time.Now().Unix())
 		queueNode.Val.Attributes.ApproximateReceiveCount = queueNode.Val.Attributes.ApproximateReceiveCount + 1
 
-		node := receivedMessagesQueueDB.(*DLLQueue).Enqueue(&DLLQueueNode{
-			Val: queueNode.Val,
-		})
+		node := receivedMessagesQueueDB.(*PriorityQueue).Enqueue(&Item{val: queueNode.Val})
 
 		receivedMessagesMapDB.(*sync.Map).Store(queueNode.Val.ReceiptHandle, node)
 		result = append(result, queueNode.Val)
@@ -217,13 +215,13 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 	receivedMessagesMapDB.(*sync.Map).Delete(receiptHandle)
 	// Check if the message was read before the queue was last purged
 	queueDB, _ := s.queues.Load(queue)
-	if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*DLLQueueNode).Val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
+	if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*Item).val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
 		node = nil
 		return true, nil
 	}
 
 	// will not need this again once we migrate to PriorityQueue based on when message was read
-	err := receivedMessagesQueueDB.(*DLLQueue).Remove(node.(*DLLQueueNode))
+	err := receivedMessagesQueueDB.(*PriorityQueue).Remove(node.(*Item))
 	if err != nil {
 		return false, errors.New("Message could not be deleted")
 	}
@@ -269,14 +267,14 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 
 		// Check if the message was read before the queue was last purged
 		queueDB, _ := s.queues.Load(queue)
-		if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*DLLQueueNode).Val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
+		if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*Item).val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
 			result.Successful = append(result.Successful, models.BatchResultEntry{
 				ID: entry.ID,
 			})
 			continue
 		}
 
-		err := receivedMessagesQueueDB.(*DLLQueue).Remove(node.(*DLLQueueNode))
+		err := receivedMessagesQueueDB.(*PriorityQueue).Remove(node.(*Item))
 		if err != nil {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
 				ID:          entry.ID,
@@ -314,7 +312,7 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 			return false, errors.New("Message receipt handle does not exist")
 		}
 
-		node.(*DLLQueueNode).Val.ReadAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
+		node.(*Item).val.ReadAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
 
 	}
 
@@ -364,7 +362,7 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 			continue
 		}
 
-		node.(*DLLQueueNode).Val.ReadAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
+		node.(*Item).val.ReadAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
 
 		result.Successful = append(result.Successful, models.BatchResultEntry{
 			ID: entry.ID,

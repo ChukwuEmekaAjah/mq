@@ -15,14 +15,15 @@ func Monitor(store *Store) {
 			receivedMessagesMapDB, _ := store.receivedMessagesMap.Load(queue.(string))
 			messagesDB, _ := store.queues.Load(queue.(string))
 
-			for head := queueDB.(*DLLQueue).Front(); head != nil; head = queueDB.(*DLLQueue).Front() {
-				if head.Val.ReadAt.Add(time.Second * time.Duration(MaxMessageVisibilityTimeout)).Before(time.Now()) {
-					message, _ := queueDB.(*DLLQueue).Dequeue()
-					receivedMessagesMapDB.(*sync.Map).Delete(message.Val.ReceiptHandle)
+			for head := queueDB.(*PriorityQueue).Front(); head != nil; head = queueDB.(*PriorityQueue).Front() {
+				if head.val.ReadAt.Add(time.Second * time.Duration(MaxMessageVisibilityTimeout)).Before(time.Now()) {
+					item, _ := queueDB.(*PriorityQueue).Dequeue()
+					receivedMessagesMapDB.(*sync.Map).Delete(item.val.ReceiptHandle)
 
 					messagesDB.(*Queue).Enqueue(&QueueNode{
-						Val: message.Val,
+						Val: item.val,
 					})
+					item = nil
 				} else {
 					// if the front message is not expired, other messages behind it won't be expired
 					break
