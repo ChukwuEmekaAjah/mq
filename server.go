@@ -33,7 +33,7 @@ func main() {
 		mq.Backup(db, config)
 	}(store, serverConfig)
 
-	http.HandleFunc("/queues/{queueName}/messages/{receiptHandleId}", handlers.ManageMessages(store))
+	http.HandleFunc("/queues/{queueName}/messages/{receiptHandle}", handlers.ManageMessages(store))
 	http.HandleFunc("/queues/{queueName}/messages", handlers.ManageMessages(store))
 	http.HandleFunc("/queues/{queueName}/attributes", handlers.ManageQueues(store))
 	http.HandleFunc("/queues/{queueName}/tags", handlers.ManageQueues(store))

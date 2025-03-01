@@ -39,7 +39,7 @@ func ManageMessages(store *mq.Store) func(http.ResponseWriter, *http.Request) {
 
 			}
 
-			if req.Pattern == "/queues/{queueName}/messages/{receiptHandleId}" {
+			if req.Pattern == "/queues/{queueName}/messages/{receiptHandle}" {
 				if req.Method == "DELETE" {
 					DeleteMessage(store, w, req)
 					return
