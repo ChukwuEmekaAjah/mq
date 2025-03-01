@@ -25,8 +25,9 @@ type MessageAttribute struct {
 
 // Message represents a message sent by a client
 type Message struct {
-	InsertedAt time.Time
-	ReadAt     time.Time
+	InsertedAt                  time.Time
+	ReadAt                      time.Time
+	MessageVisibilityTimesOutAt time.Time
 
 	MessageID              string                      `json:"messageId"`
 	Body                   string                      `json:"body"`

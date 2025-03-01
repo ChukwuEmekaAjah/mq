@@ -16,7 +16,7 @@ func Monitor(store *Store) {
 			messagesDB, _ := store.queues.Load(queue.(string))
 
 			for head := queueDB.(*PriorityQueue).Front(); head != nil; head = queueDB.(*PriorityQueue).Front() {
-				if head.val.ReadAt.Add(time.Second * time.Duration(MaxMessageVisibilityTimeout)).Before(time.Now()) {
+				if head.val.MessageVisibilityTimesOutAt.Before(time.Now()) {
 					item, _ := queueDB.(*PriorityQueue).Dequeue()
 					receivedMessagesMapDB.(*sync.Map).Delete(item.val.ReceiptHandle)
 
@@ -31,6 +31,6 @@ func Monitor(store *Store) {
 			}
 			return true
 		})
-		time.Sleep(time.Second)
+		time.Sleep(time.Second * time.Duration(10))
 	}
 }

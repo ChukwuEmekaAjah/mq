@@ -32,7 +32,7 @@ func (pqc PriorityQueueContainer) Len() int {
 
 // Less checks if one value is greater than the other
 func (pqc PriorityQueueContainer) Less(i, j int) bool {
-	return pqc[i].val.ReadAt.Before(pqc[j].val.ReadAt)
+	return pqc[i].val.MessageVisibilityTimesOutAt.Before(pqc[j].val.MessageVisibilityTimesOutAt)
 }
 
 // Swap updates the position of an item in the queue
@@ -148,6 +148,15 @@ func (pq *PriorityQueue) Clear() bool {
 	defer pq.mu.Unlock()
 
 	pq.container = new(PriorityQueueContainer)
+	return true
+}
+
+// Update organizes the heap array after an item is changed so as to maintain order
+func (pq *PriorityQueue) Update(item *Item) bool {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+
+	heap.Fix(pq.container, item.index)
 	return true
 }
 

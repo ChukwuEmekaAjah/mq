@@ -41,6 +41,9 @@ func (s *Store) CreateQueue(name string, attributes QueueAttributes, tags map[st
 
 	id := uuid.NewString()
 
+	if attributes.VisibilityTimeout <= 0 {
+		attributes.VisibilityTimeout = uint(MaxMessageVisibilityTimeout)
+	}
 	s.queues.Store(name, &Queue{
 		ID:         id,
 		QueueName:  name,
@@ -185,10 +188,13 @@ func (s *Store) ReadMessages(queue string, size uint) ([]Message, error) {
 		return nil, err
 	}
 
+	messageVisibilityTimeout := queueDB.(*Queue).Attributes.VisibilityTimeout
+	fmt.Println("Visibility timeout is", messageVisibilityTimeout)
 	for _, queueNode := range queueNodes {
 		queueNode.Val.Attributes.ApproximateFirstReceiveTimeStamp = int(time.Now().Unix())
 		queueNode.Val.Attributes.ApproximateReceiveCount = queueNode.Val.Attributes.ApproximateReceiveCount + 1
-
+		queueNode.Val.ReadAt = time.Now()
+		queueNode.Val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(messageVisibilityTimeout) * time.Second)
 		node := receivedMessagesQueueDB.(*PriorityQueue).Enqueue(&Item{val: queueNode.Val})
 
 		receivedMessagesMapDB.(*sync.Map).Store(queueNode.Val.ReceiptHandle, node)
@@ -312,8 +318,9 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 			return false, errors.New("Message receipt handle does not exist")
 		}
 
-		node.(*Item).val.ReadAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
-
+		receivedMessagesQueueDB, _ := s.receivedMessagesQueues.Load(queue)
+		node.(*Item).val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
+		receivedMessagesQueueDB.(*PriorityQueue).Update(node.(*Item))
 	}
 
 	return true, nil
@@ -362,7 +369,7 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 			continue
 		}
 
-		node.(*Item).val.ReadAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
+		node.(*Item).val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
 
 		result.Successful = append(result.Successful, models.BatchResultEntry{
 			ID: entry.ID,
