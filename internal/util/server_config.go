@@ -4,4 +4,5 @@ package util
 type ServerConfig struct {
 	BackupFrequency int
 	BackupBucket    string
+	BackupType      string
 }

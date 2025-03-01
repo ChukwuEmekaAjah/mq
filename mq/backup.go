@@ -9,15 +9,20 @@ import (
 	"log"
 	"os"
 	"path"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/ChukwuEmekaAjah/mq/internal/util"
 )
 
+const s3Backup string = "s3"
+const fsBackup string = "fs"
+
 // StorageManager enables different storage mediums to be used in backing up and restoring queue data
 type StorageManager interface {
 	Store(*ZipFile)
-	Restore(string) *io.ReadWriteCloser
+	Restore(*Store)
 }
 
 // FileStorageManager enables local filesystem backup
@@ -28,6 +33,53 @@ type FileStorageManager struct {
 // Store persists the file in local filesystem
 func (f *FileStorageManager) Store(file *ZipFile) {
 	file.Close()
+}
+
+// Restore retrieves the queue data from the local filesystem and loads it into memory
+func (f *FileStorageManager) Restore(store *Store) {
+	entries, err := os.ReadDir(f.location)
+	if err != nil {
+		log.Fatal("Could not restore queue data while trying to read directory", err)
+	}
+
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".zip") {
+			continue
+		}
+		r, err := zip.OpenReader(path.Join(f.location, entry.Name()))
+		if err != nil {
+			log.Fatal("Could not restore queue data", err)
+		}
+
+		zipFile := &ZipFile{reader: r}
+		result, err := zipFile.ReadFile()
+		if err != nil {
+			log.Fatal("Could not restore queue data", err)
+		}
+
+		q := result["queue"]
+		queue := q.(*Queue)
+		unreadMessages := result["messages"]
+		messages := unreadMessages.(*[]Message)
+		messagesQueueNodes := make([]*QueueNode, 0)
+		for _, message := range *messages {
+			messagesQueueNodes = append(messagesQueueNodes, &QueueNode{Val: message})
+		}
+		queue.EnqueueBatch(messagesQueueNodes)
+		store.queues.Store(queue.QueueName, queue)
+		receivedMessagesQueue := NewPriorityQueue(queue.QueueName, queue.ID)
+		readMessages := result["readMessages"]
+		messages = readMessages.(*[]Message)
+		readMessagesQueueNodes := make([]*Item, 0)
+		readMessagesMap := &sync.Map{}
+		for _, message := range *messages {
+			readMessageNode := &Item{val: message}
+			readMessagesQueueNodes = append(readMessagesQueueNodes, readMessageNode)
+			readMessagesMap.Store(message.ReceiptHandle, readMessageNode)
+		}
+		store.receivedMessagesQueues.Store(queue.QueueName, receivedMessagesQueue)
+		store.receivedMessagesMap.Store(queue.QueueName, readMessagesMap)
+	}
 }
 
 // ZipFile represents a collection of files to be compressed
@@ -125,9 +177,17 @@ func Backup(store *Store, config *util.ServerConfig) {
 			queueNames = append(queueNames, queue.(*Queue).QueueName)
 			return true
 		})
-		backupManager := &FileStorageManager{
-			location: "queue",
+		var backupManager StorageManager
+		switch {
+		case config.BackupType == fsBackup:
+			backupManager = &FileStorageManager{
+				location: config.BackupBucket,
+			}
+			break
+		default:
+			return
 		}
+
 		err := os.MkdirAll(config.BackupBucket, 0770)
 		if err != nil {
 			log.Fatal("Could not create backup directory", err)
@@ -156,9 +216,9 @@ func Backup(store *Store, config *util.ServerConfig) {
 				continue
 			}
 
-			readMessagesBytes, err := readQ.(*DLLQueue).MessagesToJSON()
+			readMessagesBytes, err := readQ.(*PriorityQueue).MessagesToJSON()
 
-			buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", backupManager.location, queueName)))
+			buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", config.BackupBucket, queueName)))
 
 			if err != nil {
 				continue
