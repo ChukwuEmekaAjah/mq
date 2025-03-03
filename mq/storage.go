@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -171,6 +172,78 @@ func (s *Store) AddMessage(queue string, message []byte) (string, error) {
 	return messageData.MessageID, nil
 }
 
+// AddMessageBatch adds a set of messages at once into the message queue
+func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) models.BatchResult {
+	result := models.BatchResult{Successful: make([]map[string]string, 0), Failed: []models.BatchResultErrorEntry{}}
+	queueDB, ok := s.queues.Load(queue)
+	if !ok {
+		for _, entry := range messages {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Queue does not exist",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+		}
+		return result
+	}
+
+	validMessages := make([]models.MessageRequest, 0)
+	for _, entry := range messages {
+
+		if entry.MessageBody == "" {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Message body is required",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+			continue
+		}
+
+		if !ok {
+			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
+				ID:          entry.ID,
+				Message:     "Message receipt handle does not exist",
+				Code:        "4xx",
+				SenderFault: true,
+			})
+			continue
+		}
+
+		validMessages = append(validMessages, entry)
+	}
+
+	messagesToInsert := make([]*QueueNode, 0)
+	for index, message := range validMessages {
+		md5OfMessageBody := fmt.Sprintf("%x", md5.Sum([]byte(message.MessageBody)))
+		messageID := uuid.NewString()
+		sequenceNumber := queueDB.(*Queue).Size + uint(index)
+		messagesToInsert = append(messagesToInsert, &QueueNode{
+			Val: Message{
+				MessageID:  messageID,
+				InsertedAt: time.Now(),
+				Attributes: Attributes{
+					ApproximateReceiveCount: 0,
+					SentTimestamp:           time.Now().Unix(),
+					SequenceNumber:          sequenceNumber,
+				},
+				Body:      message.MessageBody,
+				MD5OfBody: md5OfMessageBody,
+			},
+		})
+		result.Successful = append(result.Successful, map[string]string{
+			"Id":               message.ID,
+			"MD5OfMessageBody": md5OfMessageBody,
+			"MessageId":        messageID,
+			"SequenceNumber":   strconv.FormatUint(uint64(sequenceNumber), 10),
+		})
+	}
+	queueDB.(*Queue).EnqueueBatch(messagesToInsert)
+
+	return result
+}
+
 // ReadMessages removes messages from the queue
 func (s *Store) ReadMessages(queue string, size uint) ([]Message, error) {
 	queueDB, ok := s.queues.Load(queue)
@@ -238,7 +311,7 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 // DeleteMessageBatch removes messages from read messages queue
 func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageBatchRequestEntry) models.BatchResult {
 	result := models.BatchResult{
-		Successful: make([]models.BatchResultEntry, 0),
+		Successful: make([]map[string]string, 0),
 		Failed:     make([]models.BatchResultErrorEntry, 0),
 	}
 
@@ -274,8 +347,8 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		// Check if the message was read before the queue was last purged
 		queueDB, _ := s.queues.Load(queue)
 		if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*Item).val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
-			result.Successful = append(result.Successful, models.BatchResultEntry{
-				ID: entry.ID,
+			result.Successful = append(result.Successful, map[string]string{
+				"ID": entry.ID,
 			})
 			continue
 		}
@@ -292,8 +365,8 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		}
 
 		receivedMessagesMapDB.(*sync.Map).Delete(entry.ReceiptHandle)
-		result.Successful = append(result.Successful, models.BatchResultEntry{
-			ID: entry.ID,
+		result.Successful = append(result.Successful, map[string]string{
+			"ID": entry.ID,
 		})
 	}
 
@@ -329,7 +402,7 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 // UpdateMessageBatch updates specific fields in a message
 func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageVisibilityRequest) models.BatchResult {
 	result := models.BatchResult{
-		Successful: make([]models.BatchResultEntry, 0),
+		Successful: make([]map[string]string, 0),
 		Failed:     make([]models.BatchResultErrorEntry, 0),
 	}
 	_, ok := s.queues.Load(queue)
@@ -371,8 +444,8 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 
 		node.(*Item).val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
 
-		result.Successful = append(result.Successful, models.BatchResultEntry{
-			ID: entry.ID,
+		result.Successful = append(result.Successful, map[string]string{
+			"ID": entry.ID,
 		})
 	}
 

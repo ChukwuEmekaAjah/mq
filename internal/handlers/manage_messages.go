@@ -16,6 +16,13 @@ func ManageMessages(store *mq.Store) func(http.ResponseWriter, *http.Request) {
 		func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Add("Content-Type", "application/json")
 
+			if req.Pattern == "/queues/{queueName}/messages/bulk" {
+				if req.Method == "POST" {
+					AddMessageBatch(store, w, req)
+					return
+				}
+			}
+
 			if req.Pattern == "/queues/{queueName}/messages" {
 				if req.Method == "POST" {
 					AddMessage(store, w, req)
