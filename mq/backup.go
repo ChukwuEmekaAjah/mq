@@ -177,16 +177,6 @@ func Backup(store *Store, config *util.ServerConfig) {
 			queueNames = append(queueNames, queue.(*Queue).QueueName)
 			return true
 		})
-		var backupManager StorageManager
-		switch {
-		case config.BackupType == fsBackup:
-			backupManager = &FileStorageManager{
-				location: config.BackupBucket,
-			}
-			break
-		default:
-			return
-		}
 
 		err := os.MkdirAll(config.BackupBucket, 0770)
 		if err != nil {
@@ -227,7 +217,7 @@ func Backup(store *Store, config *util.ServerConfig) {
 			zipFile.WriteFile("queue.json", qBytes)
 			zipFile.WriteFile("messages.json", messageBytes)
 			zipFile.WriteFile("read_messages.json", readMessagesBytes)
-			backupManager.Store(zipFile)
+			store.backupManager.Store(zipFile)
 		}
 
 		time.Sleep(time.Second * time.Duration(config.BackupFrequency))

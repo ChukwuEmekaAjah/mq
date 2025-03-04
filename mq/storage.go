@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ChukwuEmekaAjah/mq/internal/models"
+	"github.com/ChukwuEmekaAjah/mq/internal/util"
 	"github.com/google/uuid"
 )
 
@@ -21,15 +22,24 @@ type Store struct {
 	queues                 *sync.Map
 	receivedMessagesQueues *sync.Map
 	receivedMessagesMap    *sync.Map
+	backupManager          StorageManager
 }
 
 // NewStore creates a new store pointer record
-func NewStore() *Store {
-	return &Store{
+func NewStore(config *util.ServerConfig) *Store {
+	store := &Store{
 		queues:                 &sync.Map{},
 		receivedMessagesQueues: &sync.Map{},
 		receivedMessagesMap:    &sync.Map{},
 	}
+	switch {
+	case config.BackupType == util.FSBackup:
+		store.backupManager = &FileStorageManager{
+			location: config.BackupBucket,
+		}
+		break
+	}
+	return store
 }
 
 // CreateQueue creates a new queue

@@ -21,7 +21,7 @@ func main() {
 
 	flag.Parse()
 
-	store := mq.NewStore()
+	store := mq.NewStore(serverConfig)
 
 	mq.Restore(store, serverConfig)
 
