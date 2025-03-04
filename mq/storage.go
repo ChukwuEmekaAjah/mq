@@ -2,7 +2,6 @@ package mq
 
 import (
 	"crypto/md5"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -136,37 +135,30 @@ func (s *Store) ListQueues() []Queue {
 }
 
 // AddMessage adds a message to a queue
-func (s *Store) AddMessage(queue string, message []byte) (string, error) {
+func (s *Store) AddMessage(queue string, message *models.MessageRequest) (string, error) {
 	queueDB, ok := s.queues.Load(queue)
 	if !ok {
 		return "", errors.New("Queue does not exist")
 	}
 
-	var messageData *Message = &Message{}
-	err := json.Unmarshal(message, messageData)
-
-	if err != nil {
-		return "", errors.New("Queue message could not be parsed")
+	md5OfMessageBody := fmt.Sprintf("%x", md5.Sum([]byte(message.MessageBody)))
+	messageID := uuid.NewString()
+	var messageData Message = Message{
+		MessageID:  messageID,
+		InsertedAt: time.Now(),
+		Attributes: Attributes{
+			ApproximateReceiveCount: 0,
+			SentTimestamp:           time.Now().Unix(),
+			SequenceNumber:          queueDB.(*Queue).Size + 1,
+		},
+		Body:              message.MessageBody,
+		MD5OfBody:         md5OfMessageBody,
+		MessageAttributes: message.MessageAttributes,
 	}
 
-	if messageData.Body != "" && messageData.MD5OfBody != "" {
-		if fmt.Sprintf("%x", md5.Sum([]byte(messageData.Body))) != messageData.MD5OfBody {
-			return "", errors.New("Provided message body MD5 hash does not match")
-		}
-	}
-
-	messageData.MessageID = uuid.NewString()
-	messageData.InsertedAt = time.Now()
-	messageData.Attributes = Attributes{
-		ApproximateReceiveCount: 0,
-		SentTimestamp:           time.Now().Unix(),
-		SequenceNumber:          queueDB.(*Queue).Size + 1,
-	}
-
-	// update attributes
 	// insert into queue
 	queueDB.(*Queue).Enqueue(&QueueNode{
-		Val: *messageData,
+		Val: messageData,
 	})
 
 	return messageData.MessageID, nil
@@ -218,7 +210,7 @@ func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) 
 	for index, message := range validMessages {
 		md5OfMessageBody := fmt.Sprintf("%x", md5.Sum([]byte(message.MessageBody)))
 		messageID := uuid.NewString()
-		sequenceNumber := queueDB.(*Queue).Size + uint(index)
+		sequenceNumber := queueDB.(*Queue).Size + uint(index) + 1
 		messagesToInsert = append(messagesToInsert, &QueueNode{
 			Val: Message{
 				MessageID:  messageID,
@@ -228,8 +220,9 @@ func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) 
 					SentTimestamp:           time.Now().Unix(),
 					SequenceNumber:          sequenceNumber,
 				},
-				Body:      message.MessageBody,
-				MD5OfBody: md5OfMessageBody,
+				Body:              message.MessageBody,
+				MD5OfBody:         md5OfMessageBody,
+				MessageAttributes: message.MessageAttributes,
 			},
 		})
 		result.Successful = append(result.Successful, map[string]string{

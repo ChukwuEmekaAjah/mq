@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/ChukwuEmekaAjah/mq/internal/models"
 	"github.com/ChukwuEmekaAjah/mq/internal/util"
 	"github.com/ChukwuEmekaAjah/mq/mq"
 )
@@ -48,7 +49,20 @@ func AddMessage(store *mq.Store, w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	messageID, err := store.AddMessage(req.PathValue("queueName"), requestBodyBytes)
+	requestBody := &models.MessageRequest{}
+	err = json.Unmarshal(requestBodyBytes, requestBody)
+	if err != nil {
+		response, _ := json.Marshal(util.ResponseBody{
+			Message: "Request body could not be parsed",
+			Data:    nil,
+		})
+
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(response)
+		return
+	}
+
+	messageID, err := store.AddMessage(req.PathValue("queueName"), requestBody)
 
 	if err != nil {
 		response, marshalErr := json.Marshal(util.ResponseBody{
