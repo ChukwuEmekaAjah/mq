@@ -4,13 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ChukwuEmekaAjah/mq/internal/util"
@@ -66,19 +64,19 @@ func (f *FileStorageManager) Restore(store *Store) {
 			messagesQueueNodes = append(messagesQueueNodes, &QueueNode{Val: message})
 		}
 		queue.EnqueueBatch(messagesQueueNodes)
-		store.queues.Store(queue.QueueName, queue)
+		store.queues[queue.QueueName] = queue
 		receivedMessagesQueue := NewPriorityQueue(queue.QueueName, queue.ID)
 		readMessages := result["readMessages"]
 		messages = readMessages.(*[]Message)
 		readMessagesQueueNodes := make([]*Item, 0)
-		readMessagesMap := &sync.Map{}
+		readMessagesMap := make(map[string]*Item)
 		for _, message := range *messages {
 			readMessageNode := &Item{val: message}
 			readMessagesQueueNodes = append(readMessagesQueueNodes, readMessageNode)
-			readMessagesMap.Store(message.ReceiptHandle, readMessageNode)
+			readMessagesMap[message.ReceiptHandle] = readMessageNode
 		}
-		store.receivedMessagesQueues.Store(queue.QueueName, receivedMessagesQueue)
-		store.receivedMessagesMap.Store(queue.QueueName, readMessagesMap)
+		store.receivedMessagesQueues[queue.QueueName] = receivedMessagesQueue
+		store.receivedMessagesMap[queue.QueueName] = readMessagesMap
 	}
 }
 
@@ -172,54 +170,12 @@ func Backup(store *Store, config *util.ServerConfig) {
 	// queue messages will be its own json file
 	// received queue messages will be its own json file
 	for {
-		queueNames := make([]string, 0)
-		store.queues.Range(func(queueName, queue interface{}) bool {
-			queueNames = append(queueNames, queue.(*Queue).QueueName)
-			return true
-		})
-
 		err := os.MkdirAll(config.BackupBucket, 0770)
 		if err != nil {
 			log.Fatal("Could not create backup directory", err)
 		}
 
-		for _, queueName := range queueNames {
-			q, exists := store.queues.Load(queueName)
-
-			if !exists {
-				continue
-			}
-
-			qBytes, err := q.(*Queue).ToJSON()
-
-			if err != nil {
-				continue
-			}
-
-			messageBytes, err := q.(*Queue).MessagesToJSON()
-			if err != nil {
-				continue
-			}
-
-			readQ, exists := store.receivedMessagesQueues.Load(queueName)
-			if !exists {
-				continue
-			}
-
-			readMessagesBytes, err := readQ.(*PriorityQueue).MessagesToJSON()
-
-			buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", config.BackupBucket, queueName)))
-
-			if err != nil {
-				continue
-			}
-			zipFile := &ZipFile{writer: zip.NewWriter(buffer)}
-			zipFile.WriteFile("queue.json", qBytes)
-			zipFile.WriteFile("messages.json", messageBytes)
-			zipFile.WriteFile("read_messages.json", readMessagesBytes)
-			store.backupManager.Store(zipFile)
-		}
-
+		store.Backup(config)
 		time.Sleep(time.Second * time.Duration(config.BackupFrequency))
 	}
 }

@@ -1,9 +1,12 @@
 package mq
 
 import (
+	"archive/zip"
 	"crypto/md5"
 	"errors"
 	"fmt"
+	"os"
+	"path"
 	"strconv"
 	"sync"
 	"time"
@@ -19,18 +22,19 @@ var receivedMessagesMap sync.Map
 
 // Store holds the data for all queues that a user creates on the server
 type Store struct {
-	queues                 *sync.Map
-	receivedMessagesQueues *sync.Map
-	receivedMessagesMap    *sync.Map
+	queues                 map[string]*Queue
+	receivedMessagesQueues map[string]*PriorityQueue
+	receivedMessagesMap    map[string]map[string]*Item
 	backupManager          StorageManager
+	mu                     sync.Mutex
 }
 
 // NewStore creates a new store pointer record
 func NewStore(config *util.ServerConfig) *Store {
 	store := &Store{
-		queues:                 &sync.Map{},
-		receivedMessagesQueues: &sync.Map{},
-		receivedMessagesMap:    &sync.Map{},
+		queues:                 make(map[string]*Queue),
+		receivedMessagesQueues: make(map[string]*PriorityQueue),
+		receivedMessagesMap:    make(map[string]map[string]*Item),
 	}
 	switch {
 	case config.BackupType == util.FSBackup:
@@ -44,9 +48,11 @@ func NewStore(config *util.ServerConfig) *Store {
 
 // CreateQueue creates a new queue
 func (s *Store) CreateQueue(name string, attributes QueueAttributes, tags map[string]string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if val, ok := s.queues.Load(name); ok {
-		return (val.(*Queue)).ID, nil
+	if val, ok := s.queues[name]; ok {
+		return val.ID, nil
 	}
 
 	id := uuid.NewString()
@@ -54,62 +60,68 @@ func (s *Store) CreateQueue(name string, attributes QueueAttributes, tags map[st
 	if attributes.VisibilityTimeout <= 0 {
 		attributes.VisibilityTimeout = uint(MaxMessageVisibilityTimeout)
 	}
-	s.queues.Store(name, &Queue{
+	s.queues[name] = &Queue{
 		ID:         id,
 		QueueName:  name,
 		Attributes: attributes,
 		Tags:       tags,
-	})
+	}
 
-	s.receivedMessagesQueues.Store(name, NewPriorityQueue(name, id))
+	s.receivedMessagesQueues[name] = NewPriorityQueue(name, id)
 
-	s.receivedMessagesMap.Store(name, &sync.Map{})
+	s.receivedMessagesMap[name] = make(map[string]*Item)
 
 	return id, nil
 }
 
 // DeleteQueue deletes a queue and its contents from the system
 func (s *Store) DeleteQueue(name string) (bool, error) {
-	if _, ok := s.queues.Load(name); !ok {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.queues[name]; !ok {
 		return false, errors.New("Queue does not exist")
 	}
 
-	s.queues.Delete(name)
-	s.receivedMessagesQueues.Delete(name)
-	s.receivedMessagesMap.Delete(name)
+	delete(s.queues, name)
+	delete(s.receivedMessagesMap, name)
+	delete(s.receivedMessagesQueues, name)
 
 	return true, nil
 }
 
 // PurgeQueue deletes all the messages in a queue
 func (s *Store) PurgeQueue(name string) (bool, error) {
-	queueDB, ok := s.queues.Load(name)
-	if !ok {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.queues[name]; !ok {
 		return false, errors.New("Queue does not exist")
 	}
-	queueDB.(*Queue).Clear()
 
-	receivedMessagesQueueDB, _ := s.receivedMessagesQueues.Load(name)
-	receivedMessagesQueueDB.(*PriorityQueue).Clear()
-
+	s.queues[name].Clear()
+	s.receivedMessagesQueues[name].Clear()
+	s.receivedMessagesMap[name] = make(map[string]*Item)
 	return true, nil
 }
 
 // UpdateQueue updates fields in a queue and its contents from the system
 func (s *Store) UpdateQueue(name string, data interface{}) (bool, error) {
-	queue, ok := s.queues.Load(name)
-	if !ok {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.queues[name]; !ok {
 		return false, errors.New("Queue does not exist")
 	}
 
 	switch data.(type) {
 	case QueueAttributes:
-		queue.(*Queue).Attributes = data.(QueueAttributes)
+		s.queues[name].Attributes = data.(QueueAttributes)
 	case map[string]string:
-		queue.(*Queue).Tags = data.(map[string]string)
+		s.queues[name].Tags = data.(map[string]string)
 	case []string:
 		for _, key := range data.([]string) {
-			delete(queue.(*Queue).Tags, key)
+			delete(s.queues[name].Tags, key)
 		}
 	}
 
@@ -118,35 +130,37 @@ func (s *Store) UpdateQueue(name string, data interface{}) (bool, error) {
 
 // GetQueue retrieves a queue's attributes
 func (s *Store) GetQueue(name string) (*Queue, error) {
-	queue, ok := s.queues.Load(name)
+
+	queue, ok := s.queues[name]
 	if !ok {
 		return nil, errors.New("Queue does not exist")
 	}
 
-	return queue.(*Queue), nil
+	return queue, nil
 }
 
 // ListQueues retrieves all the queues on the server
 func (s *Store) ListQueues() []Queue {
 	result := make([]Queue, 0)
 
-	s.queues.Range(func(name interface{}, queue interface{}) bool {
-		q := queue.(*Queue)
+	for _, q := range s.queues {
 		result = append(result, Queue{
 			Attributes: q.Attributes,
 			QueueName:  q.QueueName,
 			ID:         q.ID,
 			Tags:       q.Tags,
 		})
-		return true
-	})
+	}
 
 	return result
 }
 
 // AddMessage adds a message to a queue
 func (s *Store) AddMessage(queue string, message *models.MessageRequest) (string, error) {
-	queueDB, ok := s.queues.Load(queue)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueDB, ok := s.queues[queue]
 	if !ok {
 		return "", errors.New("Queue does not exist")
 	}
@@ -159,7 +173,7 @@ func (s *Store) AddMessage(queue string, message *models.MessageRequest) (string
 		Attributes: Attributes{
 			ApproximateReceiveCount: 0,
 			SentTimestamp:           time.Now().Unix(),
-			SequenceNumber:          queueDB.(*Queue).Size + 1,
+			SequenceNumber:          queueDB.Size + 1,
 		},
 		Body:              message.MessageBody,
 		MD5OfBody:         md5OfMessageBody,
@@ -167,7 +181,7 @@ func (s *Store) AddMessage(queue string, message *models.MessageRequest) (string
 	}
 
 	// insert into queue
-	queueDB.(*Queue).Enqueue(&QueueNode{
+	queueDB.Enqueue(&QueueNode{
 		Val: messageData,
 	})
 
@@ -176,8 +190,11 @@ func (s *Store) AddMessage(queue string, message *models.MessageRequest) (string
 
 // AddMessageBatch adds a set of messages at once into the message queue
 func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) models.BatchResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	result := models.BatchResult{Successful: make([]map[string]string, 0), Failed: []models.BatchResultErrorEntry{}}
-	queueDB, ok := s.queues.Load(queue)
+	queueDB, ok := s.queues[queue]
 	if !ok {
 		for _, entry := range messages {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
@@ -220,7 +237,7 @@ func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) 
 	for index, message := range validMessages {
 		md5OfMessageBody := fmt.Sprintf("%x", md5.Sum([]byte(message.MessageBody)))
 		messageID := uuid.NewString()
-		sequenceNumber := queueDB.(*Queue).Size + uint(index) + 1
+		sequenceNumber := queueDB.Size + uint(index) + 1
 		messagesToInsert = append(messagesToInsert, &QueueNode{
 			Val: Message{
 				MessageID:  messageID,
@@ -242,38 +259,41 @@ func (s *Store) AddMessageBatch(queue string, messages []models.MessageRequest) 
 			"SequenceNumber":   strconv.FormatUint(uint64(sequenceNumber), 10),
 		})
 	}
-	queueDB.(*Queue).EnqueueBatch(messagesToInsert)
+	queueDB.EnqueueBatch(messagesToInsert)
 
 	return result
 }
 
 // ReadMessages removes messages from the queue
 func (s *Store) ReadMessages(queue string, size uint) ([]Message, error) {
-	queueDB, ok := s.queues.Load(queue)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	queueDB, ok := s.queues[queue]
 	if !ok {
 		return nil, errors.New("Queue does not exist")
 	}
 
-	receivedMessagesQueueDB, _ := s.receivedMessagesQueues.Load(queue)
-	receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
+	receivedMessagesQueueDB, _ := s.receivedMessagesQueues[queue]
+	receivedMessagesMapDB, _ := s.receivedMessagesMap[queue]
 
-	queueNodes, err := queueDB.(*Queue).DequeueBatch(int(size))
+	queueNodes, err := queueDB.DequeueBatch(int(size))
 
 	result := make([]Message, 0, size)
 	if err != nil {
 		return nil, err
 	}
 
-	messageVisibilityTimeout := queueDB.(*Queue).Attributes.VisibilityTimeout
-	fmt.Println("Visibility timeout is", messageVisibilityTimeout)
+	messageVisibilityTimeout := queueDB.Attributes.VisibilityTimeout
+
 	for _, queueNode := range queueNodes {
 		queueNode.Val.Attributes.ApproximateFirstReceiveTimeStamp = int(time.Now().Unix())
 		queueNode.Val.Attributes.ApproximateReceiveCount = queueNode.Val.Attributes.ApproximateReceiveCount + 1
 		queueNode.Val.ReadAt = time.Now()
 		queueNode.Val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(messageVisibilityTimeout) * time.Second)
-		node := receivedMessagesQueueDB.(*PriorityQueue).Enqueue(&Item{val: queueNode.Val})
+		node := receivedMessagesQueueDB.Enqueue(&Item{val: queueNode.Val})
 
-		receivedMessagesMapDB.(*sync.Map).Store(queueNode.Val.ReceiptHandle, node)
+		receivedMessagesMapDB[queueNode.Val.ReceiptHandle] = node
 		result = append(result, queueNode.Val)
 	}
 
@@ -282,28 +302,30 @@ func (s *Store) ReadMessages(queue string, size uint) ([]Message, error) {
 
 // DeleteMessage removes messages from read messages queue
 func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	receivedMessagesQueueDB, ok := s.receivedMessagesQueues.Load(queue)
+	receivedMessagesQueueDB, ok := s.receivedMessagesQueues[queue]
 	if !ok {
 		return false, errors.New("Queue does not exist")
 	}
 
-	receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
-	node, ok := receivedMessagesMapDB.(*sync.Map).Load(receiptHandle)
+	node, ok := s.receivedMessagesMap[queue][receiptHandle]
 	if !ok {
 		return false, errors.New("Message receipt handle does not exist")
 	}
 
-	receivedMessagesMapDB.(*sync.Map).Delete(receiptHandle)
+	delete(s.receivedMessagesMap[queue], receiptHandle)
+
 	// Check if the message was read before the queue was last purged
-	queueDB, _ := s.queues.Load(queue)
-	if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*Item).val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
+	queueDB, _ := s.queues[queue]
+	if !queueDB.PurgedAt.IsZero() && node.val.ReadAt.Before(queueDB.PurgedAt) {
 		node = nil
 		return true, nil
 	}
 
 	// will not need this again once we migrate to PriorityQueue based on when message was read
-	err := receivedMessagesQueueDB.(*PriorityQueue).Remove(node.(*Item))
+	err := receivedMessagesQueueDB.Remove(node)
 	if err != nil {
 		return false, errors.New("Message could not be deleted")
 	}
@@ -313,12 +335,15 @@ func (s *Store) DeleteMessage(queue, receiptHandle string) (bool, error) {
 
 // DeleteMessageBatch removes messages from read messages queue
 func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageBatchRequestEntry) models.BatchResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	result := models.BatchResult{
 		Successful: make([]map[string]string, 0),
 		Failed:     make([]models.BatchResultErrorEntry, 0),
 	}
 
-	receivedMessagesQueueDB, ok := s.receivedMessagesQueues.Load(queue)
+	receivedMessagesQueueDB, ok := s.receivedMessagesQueues[queue]
 	if !ok {
 		for _, entry := range entries {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
@@ -331,11 +356,11 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		return result
 	}
 
-	receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
+	receivedMessagesMapDB, _ := s.receivedMessagesMap[queue]
 
 	for _, entry := range entries {
 
-		node, ok := receivedMessagesMapDB.(*sync.Map).Load(entry.ReceiptHandle)
+		node, ok := receivedMessagesMapDB[entry.ReceiptHandle]
 
 		if !ok {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
@@ -348,15 +373,15 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 		}
 
 		// Check if the message was read before the queue was last purged
-		queueDB, _ := s.queues.Load(queue)
-		if !queueDB.(*Queue).PurgedAt.IsZero() && node.(*Item).val.ReadAt.Before(queueDB.(*Queue).PurgedAt) {
+		queueDB, _ := s.queues[queue]
+		if !queueDB.PurgedAt.IsZero() && node.val.ReadAt.Before(queueDB.PurgedAt) {
 			result.Successful = append(result.Successful, map[string]string{
 				"ID": entry.ID,
 			})
 			continue
 		}
 
-		err := receivedMessagesQueueDB.(*PriorityQueue).Remove(node.(*Item))
+		err := receivedMessagesQueueDB.Remove(node)
 		if err != nil {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
 				ID:          entry.ID,
@@ -367,7 +392,8 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 			continue
 		}
 
-		receivedMessagesMapDB.(*sync.Map).Delete(entry.ReceiptHandle)
+		delete(s.receivedMessagesMap[queue], entry.ReceiptHandle)
+
 		result.Successful = append(result.Successful, map[string]string{
 			"ID": entry.ID,
 		})
@@ -378,7 +404,10 @@ func (s *Store) DeleteMessageBatch(queue string, entries []models.DeleteMessageB
 
 // UpdateMessage updates specific fields in a message
 func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
-	_, ok := s.queues.Load(queue)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.queues[queue]
 	if !ok {
 		return false, errors.New("Queue does not exist")
 	}
@@ -388,15 +417,14 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 		if data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout < 0 {
 			return false, errors.New("Message visibility timeout cannot be less than 0")
 		}
-		receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
-		node, ok := receivedMessagesMapDB.(*sync.Map).Load(data.(models.ChangeMessageVisibilityRequest).ReceiptHandle)
+
+		node, ok := s.receivedMessagesMap[queue][data.(models.ChangeMessageVisibilityRequest).ReceiptHandle]
 		if !ok {
 			return false, errors.New("Message receipt handle does not exist")
 		}
 
-		receivedMessagesQueueDB, _ := s.receivedMessagesQueues.Load(queue)
-		node.(*Item).val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
-		receivedMessagesQueueDB.(*PriorityQueue).Update(node.(*Item))
+		node.val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(data.(models.ChangeMessageVisibilityRequest).VisibilityTimeout) * time.Second)
+		s.receivedMessagesQueues[queue].Update(node)
 	}
 
 	return true, nil
@@ -404,11 +432,14 @@ func (s *Store) UpdateMessage(queue string, data interface{}) (bool, error) {
 
 // UpdateMessageBatch updates specific fields in a message
 func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageVisibilityRequest) models.BatchResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	result := models.BatchResult{
 		Successful: make([]map[string]string, 0),
 		Failed:     make([]models.BatchResultErrorEntry, 0),
 	}
-	_, ok := s.queues.Load(queue)
+	_, ok := s.queues[queue]
 	if !ok {
 		for _, entry := range entries {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
@@ -421,9 +452,7 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 		return result
 	}
 
-	receivedMessagesMapDB, _ := s.receivedMessagesMap.Load(queue)
 	for _, entry := range entries {
-
 		if entry.VisibilityTimeout < 0 {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
 				ID:          entry.ID,
@@ -434,7 +463,7 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 			continue
 		}
 
-		node, ok := receivedMessagesMapDB.(*sync.Map).Load(entry.ReceiptHandle)
+		node, ok := s.receivedMessagesMap[queue][entry.ReceiptHandle]
 		if !ok {
 			result.Failed = append(result.Failed, models.BatchResultErrorEntry{
 				ID:          entry.ID,
@@ -445,12 +474,67 @@ func (s *Store) UpdateMessageBatch(queue string, entries []models.ChangeMessageV
 			continue
 		}
 
-		node.(*Item).val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
-
+		node.val.MessageVisibilityTimesOutAt = time.Now().Add(time.Duration(entry.VisibilityTimeout) * time.Second)
 		result.Successful = append(result.Successful, map[string]string{
 			"ID": entry.ID,
 		})
 	}
 
 	return result
+}
+
+// Backup writes the store data to a non-volatile storage
+func (s *Store) Backup(config *util.ServerConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for queueName := range s.queues {
+
+		qBytes, err := s.queues[queueName].ToJSON()
+
+		if err != nil {
+			continue
+		}
+
+		messageBytes, err := s.queues[queueName].MessagesToJSON()
+		if err != nil {
+			continue
+		}
+
+		readMessagesBytes, err := s.receivedMessagesQueues[queueName].MessagesToJSON()
+
+		buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", config.BackupBucket, queueName)))
+
+		if err != nil {
+			continue
+		}
+		zipFile := &ZipFile{writer: zip.NewWriter(buffer)}
+		zipFile.WriteFile("queue.json", qBytes)
+		zipFile.WriteFile("messages.json", messageBytes)
+		zipFile.WriteFile("read_messages.json", readMessagesBytes)
+		s.backupManager.Store(zipFile)
+	}
+}
+
+// Monitor restores received messages that haven't been deleted back into the main message queue
+func (s *Store) Monitor() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for queue := range s.receivedMessagesQueues {
+		for head := s.receivedMessagesQueues[queue].Front(); head != nil; head = s.receivedMessagesQueues[queue].Front() {
+			if head.val.MessageVisibilityTimesOutAt.Before(time.Now()) {
+				item, _ := s.receivedMessagesQueues[queue].Dequeue()
+				delete(s.receivedMessagesMap[queue], item.val.ReceiptHandle)
+
+				s.queues[queue].Enqueue(&QueueNode{
+					Val: item.val,
+				})
+				item = nil
+			} else {
+				// if the front message is not expired, other messages behind it won't be expired
+				break
+			}
+		}
+	}
 }

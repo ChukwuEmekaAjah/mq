@@ -86,8 +86,6 @@ func NewPriorityQueue(name, id string) *PriorityQueue {
 
 // Enqueue adds a message to the queue
 func (pq *PriorityQueue) Enqueue(msg *Item) *Item {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	heap.Push(pq.container, msg)
 	return msg
@@ -95,8 +93,6 @@ func (pq *PriorityQueue) Enqueue(msg *Item) *Item {
 
 // EnqueueBatch adds a group of messages to the queue
 func (pq *PriorityQueue) EnqueueBatch(msgs []*Item) {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	for _, msg := range msgs {
 		heap.Push(pq.container, msg)
@@ -105,8 +101,6 @@ func (pq *PriorityQueue) EnqueueBatch(msgs []*Item) {
 
 // Dequeue removes a message from the head of the queue
 func (pq *PriorityQueue) Dequeue() (*Item, error) {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	if pq.container.Len() < 1 {
 		return nil, errors.New("Queue is empty")
@@ -119,8 +113,6 @@ func (pq *PriorityQueue) Dequeue() (*Item, error) {
 
 // Remove deletes a node from its position in the queue
 func (pq *PriorityQueue) Remove(node *Item) error {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	if pq.container.Len() < 1 {
 		return errors.New("Queue is empty")
@@ -132,8 +124,6 @@ func (pq *PriorityQueue) Remove(node *Item) error {
 
 // Front returns element in front of the queue
 func (pq *PriorityQueue) Front() *Item {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	if pq.container.Len() < 1 {
 		return nil
@@ -144,8 +134,6 @@ func (pq *PriorityQueue) Front() *Item {
 
 // Clear removes all the messages in the queue
 func (pq *PriorityQueue) Clear() bool {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	pq.container = new(PriorityQueueContainer)
 	return true
@@ -153,8 +141,6 @@ func (pq *PriorityQueue) Clear() bool {
 
 // Update organizes the heap array after an item is changed so as to maintain order
 func (pq *PriorityQueue) Update(item *Item) bool {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	heap.Fix(pq.container, item.index)
 	return true
@@ -162,8 +148,6 @@ func (pq *PriorityQueue) Update(item *Item) bool {
 
 // MessagesToJSON converts all queue messages to a json array
 func (pq *PriorityQueue) MessagesToJSON() ([]byte, error) {
-	pq.mu.Lock()
-	defer pq.mu.Unlock()
 
 	result := make([]Message, 0, pq.container.Len())
 	for _, item := range *pq.container {
@@ -192,7 +176,6 @@ type Queue struct {
 	Head       *QueueNode `json:"-"`
 	Tail       *QueueNode `json:"-"`
 	Size       uint       `json:"-"`
-	mu         sync.Mutex
 	QueueName  string
 	Attributes QueueAttributes
 	Tags       map[string]string
@@ -201,8 +184,6 @@ type Queue struct {
 
 // Dequeue removes a message from the head of the queue
 func (q *Queue) Dequeue() (*QueueNode, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	if q.Size < 1 {
 		return nil, errors.New("Queue is empty")
@@ -218,8 +199,6 @@ func (q *Queue) Dequeue() (*QueueNode, error) {
 
 // DequeueBatch removes at most the given size of elements from the queue
 func (q *Queue) DequeueBatch(size int) ([]*QueueNode, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	result := make([]*QueueNode, 0, size)
 
@@ -240,8 +219,6 @@ func (q *Queue) DequeueBatch(size int) ([]*QueueNode, error) {
 
 // Clear removes all the messages in the queue
 func (q *Queue) Clear() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	q.Size = 0
 	q.Head = nil
@@ -253,8 +230,6 @@ func (q *Queue) Clear() bool {
 
 // Enqueue adds a message to the queue
 func (q *Queue) Enqueue(message *QueueNode) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 
 	if q.Size == 0 {
 		q.Head = message
@@ -272,8 +247,6 @@ func (q *Queue) Enqueue(message *QueueNode) error {
 
 // EnqueueBatch adds a group of messages to the queue
 func (q *Queue) EnqueueBatch(messages []*QueueNode) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	if len(messages) == 0 {
 		return nil
 	}
@@ -294,8 +267,6 @@ func (q *Queue) EnqueueBatch(messages []*QueueNode) error {
 
 // ToJSON converts the queue struct to a json string
 func (q *Queue) ToJSON() ([]byte, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	qBytes, err := json.Marshal(q)
 
 	if err != nil {
@@ -307,8 +278,6 @@ func (q *Queue) ToJSON() ([]byte, error) {
 
 // MessagesToJSON converts the queue messages struct to json
 func (q *Queue) MessagesToJSON() ([]byte, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
 	result := make([]Message, 0, q.Size)
 
 	current := q.Head
