@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -35,6 +37,12 @@ func (f *FileStorageManager) Store(file *ZipFile) {
 
 // Restore retrieves the queue data from the local filesystem and loads it into memory
 func (f *FileStorageManager) Restore(store *Store) {
+	_, err := os.Stat(f.location)
+	if err != nil && errors.Is(err, os.ErrNotExist) {
+		fmt.Println("Nothing to restore because backup directory does not exist. Will be created in monitor goroutine.")
+		return
+	}
+
 	entries, err := os.ReadDir(f.location)
 	if err != nil {
 		log.Fatal("Could not restore queue data while trying to read directory", err)
@@ -45,11 +53,12 @@ func (f *FileStorageManager) Restore(store *Store) {
 			continue
 		}
 		r, err := zip.OpenReader(path.Join(f.location, entry.Name()))
+		defer r.Close()
 		if err != nil {
 			log.Fatal("Could not restore queue data", err)
 		}
 
-		zipFile := &ZipFile{reader: r}
+		zipFile := &ZipFile{reader: &r.Reader}
 		result, err := zipFile.ReadFile()
 		if err != nil {
 			log.Fatal("Could not restore queue data", err)
@@ -83,7 +92,8 @@ func (f *FileStorageManager) Restore(store *Store) {
 // ZipFile represents a collection of files to be compressed
 type ZipFile struct {
 	writer *zip.Writer
-	reader *zip.ReadCloser
+	reader *zip.Reader
+	name   string
 }
 
 // WriteFile adds a new file to the zip file

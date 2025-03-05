@@ -15,9 +15,9 @@ func main() {
 
 	serverConfig := &util.ServerConfig{}
 
-	flag.StringVar(&serverConfig.BackupBucket, "backup-location", "./queues", "The location where the backup data is stored. It can be an S3 bucket where the queue data will be stored or a filesystem folder")
-	flag.IntVar(&serverConfig.BackupFrequency, "backup-frequency", 10, "The number of seconds for which backups should be frequently made")
-	flag.StringVar(&serverConfig.BackupType, "backup-type", "fs", "The type of backup required to persist queue data. It can be: 's3' or 'fs'. It defaults to 'fs'")
+	flag.StringVar(&serverConfig.BackupBucket, "backupLocation", "./queues", "The location where the backup data is stored. It can be an S3 bucket where the queue data will be stored or a filesystem folder")
+	flag.IntVar(&serverConfig.BackupFrequency, "backupFrequency", 10, "The number of seconds for which backups should be frequently made")
+	flag.StringVar(&serverConfig.BackupType, "backupType", "fs", "The type of backup required to persist queue data. It can be: 's3' or 'fs'. It defaults to 'fs'")
 
 	flag.Parse()
 

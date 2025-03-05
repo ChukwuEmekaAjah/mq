@@ -42,7 +42,15 @@ func NewStore(config *util.ServerConfig) *Store {
 			location: config.BackupBucket,
 		}
 		break
+	case config.BackupType == util.S3Backup:
+		backupManager := &S3StoreManager{
+			bucket: config.BackupBucket,
+		}
+		backupManager.Setup()
+		store.backupManager = backupManager
+		break
 	}
+
 	return store
 }
 
@@ -504,11 +512,11 @@ func (s *Store) Backup(config *util.ServerConfig) {
 		readMessagesBytes, err := s.receivedMessagesQueues[queueName].MessagesToJSON()
 
 		buffer, err := os.Create(path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", config.BackupBucket, queueName)))
-
 		if err != nil {
 			continue
 		}
-		zipFile := &ZipFile{writer: zip.NewWriter(buffer)}
+
+		zipFile := &ZipFile{writer: zip.NewWriter(buffer), name: path.Join(config.BackupBucket, fmt.Sprintf("%s_%s.zip", config.BackupBucket, queueName))}
 		zipFile.WriteFile("queue.json", qBytes)
 		zipFile.WriteFile("messages.json", messageBytes)
 		zipFile.WriteFile("read_messages.json", readMessagesBytes)
